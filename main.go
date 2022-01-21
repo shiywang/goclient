@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/goombaio/namegenerator"
 	"github.com/gorilla/websocket"
+
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -58,7 +60,8 @@ type DataPacket struct {
 func userPost(URL string, user string, passwd string, data []byte) (*http.Response, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest(http.MethodPost, URL, bytes.NewReader(data))
-	req.SetBasicAuth(user, passwd)
+	//req.SetBasicAuth(user, passwd)
+	req.Header.Set("Authorization", "Token 79bfff7c4e78a575af2226fde003609680112e85")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -75,12 +78,14 @@ func getUserList() []Patient {
 	client := &http.Client{}
 	URL := httpPrefix + *addr + "/seniors/"
 	req, err := http.NewRequest(http.MethodGet, URL, nil)
-	req.SetBasicAuth(basicAuthUser, basicAuthPass)
+	//req.SetBasicAuth(basicAuthUser, basicAuthPass)
+	req.Header.Set("Authorization", "Token 79bfff7c4e78a575af2226fde003609680112e85")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 	}
+	//spew.Dump(resp.Body)
 	bodyText, err := ioutil.ReadAll(resp.Body)
 	var pList PatientPageList
 	err = json.Unmarshal(bodyText, &pList)
@@ -96,7 +101,8 @@ func deleteUser(deviceID string) {
 	fmt.Println(URL)
 
 	req, err := http.NewRequest(http.MethodDelete, URL, nil)
-	req.SetBasicAuth(basicAuthUser, basicAuthPass)
+	//req.SetBasicAuth(basicAuthUser, basicAuthPass)
+	req.Header.Set("Authorization", "Token 79bfff7c4e78a575af2226fde003609680112e85")
 	//req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -114,37 +120,9 @@ func deleteUser(deviceID string) {
 	fmt.Println(string(respBody))
 }
 
-func createUser() {
-	userData, err := json.Marshal(Patient{Name: "John Doe1", Age: 31, RoomNumber: 1, Gender: "M", DeviceID: "7C1A23F227B4", DeviceType: "RRI", User: UserStruct{Username: "test88", Email: "test@test.com", Password: "test23"}})
-	if err != nil {
-		log.Fatal(err)
-	}
+func websocketSend(deviceID string) {
 
-	resp, err := userPost(httpPrefix+*addr+"/seniors/", basicAuthUser, basicAuthPass, userData)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var res map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&res)
-	fmt.Println(res["json"])
-
-}
-func main() {
-	flag.Parse()
-	log.SetFlags(0)
-
-	//userList := getUserList()
-	//for _, val := range userList {
-	//	fmt.Println("deleting user: ", val)
-	//	deleteUser(val.DeviceID)
-	//}
-	//deleteUser("7C1A23F227B4")
-
-	createUser()
-	rand.Seed(time.Now().UnixNano())
-
-	dataPacket := DataPacket{"new", "7C1A23F227B4", 0, time.Now().UnixMilli(), 12, 60}
+	dataPacket := DataPacket{"new", deviceID, 0, time.Now().UnixNano() / 1000000, 12, 60}
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
@@ -190,7 +168,7 @@ func main() {
 				return
 			}
 			dataPacket.SeqID = dataPacket.SeqID + 1
-			dataPacket.Time = time.Now().UnixMilli()
+			dataPacket.Time = time.Now().UnixNano() / 1000000
 			dataPacket.Value = rand.Intn(100-80+1) + 80
 			dataPacket.Command = "update"
 		case <-interrupt:
@@ -220,4 +198,67 @@ func main() {
 			return
 		}
 	}
+}
+
+func createUser() string {
+	patientName := NameGenerator.Generate()
+	deviceID := RandStringRunes(12)
+	userData, err := json.Marshal(Patient{Name: patientName, Age: 31, RoomNumber: 1, Gender: "M", DeviceID: deviceID, DeviceType: "RRI", User: UserStruct{Username: RandStringRunes(6), Email: "test@test.com", Password: "test3"}})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	resp, err := userPost(httpPrefix+*addr+"/seniors/", basicAuthUser, basicAuthPass, userData)
+	if err != nil {
+		fmt.Println(err)
+		log.Fatal(err)
+	}
+
+	var res map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&res)
+	fmt.Println(res["json"])
+	return deviceID
+}
+
+var CommandFlag string
+var NameGenerator namegenerator.Generator
+
+func init() {
+	flag.StringVar(&CommandFlag, "c", "user", "command for run goclient")
+	rand.Seed(time.Now().UnixNano())
+	seed := time.Now().UTC().UnixNano()
+	NameGenerator = namegenerator.NewNameGenerator(seed)
+
+}
+
+var letterRunes = []rune("1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func RandStringRunes(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return string(b)
+}
+
+func main() {
+	flag.Parse()
+	log.SetFlags(0)
+
+	var deviceId string
+
+	if CommandFlag == "user" {
+		deviceId = createUser()
+	} else if CommandFlag == "clear" {
+		userList := getUserList()
+		for _, val := range userList {
+			fmt.Println("deleting user: ", val)
+			deleteUser(val.DeviceID)
+		}
+		//deleteUser("7C1A23F227B4")
+	} else if CommandFlag == "ws" {
+		deviceId = createUser()
+		websocketSend(deviceId)
+	}
+
 }
